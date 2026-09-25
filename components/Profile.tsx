@@ -4,6 +4,7 @@ import { User } from '../types';
 import { Settings, LogOut, Flame, Zap, Trophy, Heart, Sun, Moon } from 'lucide-react';
 import { authService } from '../services/authService';
 import { Avatar, AVATAR_IDS } from './Avatar';
+import { AiInsights } from './AiInsights';
 
 interface ProfileProps {
   user: User;
@@ -66,7 +67,6 @@ export const Profile: React.FC<ProfileProps> = ({ user, onLogout, onUpdate }) =>
         </div>
       </div>
 
-      {/* Statistics */}
       <div className="p-4 md:p-6 space-y-4 md:space-y-6">
          <h2 className="font-bold text-lg md:text-xl text-slate-700 dark:text-slate-200">Statistics</h2>
          <div className="grid grid-cols-2 gap-3 md:gap-4">
@@ -101,6 +101,8 @@ export const Profile: React.FC<ProfileProps> = ({ user, onLogout, onUpdate }) =>
                  </div>
              </div>
          </div>
+
+         <AiInsights user={user} />
 
          <h2 className="font-bold text-lg md:text-xl text-slate-700 dark:text-slate-200 mt-6 md:mt-8">Settings</h2>
          <div className="bg-white dark:bg-slate-900 rounded-2xl border-2 border-slate-200 dark:border-slate-800 overflow-hidden transition-colors duration-300">

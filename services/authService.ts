@@ -107,7 +107,7 @@ export const authService = {
       avatar: data.avatar || 'bear',
       dailyGoal: data.dailyGoal || 20,
       language: data.language || 'en',
-      theme: 'light', // Default theme
+      theme: 'light',
       joinedDate: new Date().toISOString(),
       progress: INITIAL_PROGRESS
     };

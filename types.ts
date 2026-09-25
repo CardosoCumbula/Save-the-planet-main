@@ -81,3 +81,59 @@ export enum MascotMood {
   TALKING = 'TALKING',
   BATTLE = 'BATTLE'
 }
+
+// Lesson feedback can now be IDLE, CORRECT, ALMOST (partial credit) or WRONG.
+export type LessonStatus = 'IDLE' | 'CORRECT' | 'ALMOST' | 'WRONG';
+
+// ---------------------------------------------------------------------------
+// Python AI engine API response shapes (services/aiEngineService.ts)
+// ---------------------------------------------------------------------------
+
+export interface DifficultyPrediction {
+  probability_correct: number;
+  recommended_difficulty: string;
+  reason: string;
+  model_used: string;
+}
+
+export type GradeVerdict = 'CORRECT' | 'ALMOST' | 'WRONG';
+
+export interface GradeResult {
+  similarity: number;
+  verdict: GradeVerdict;
+  partial_credit_xp: number;
+  hint: string;
+  reason: string;
+}
+
+export interface TopicRecommendation {
+  topic: string;
+  score: number;
+  reason: string;
+}
+
+export interface AiInsights {
+  user_id: string;
+  per_topic_mastery: Record<string, number>;
+  weak_topics: string[];
+  predicted_next_difficulty: string;
+  reason: string;
+  recommended_topics: TopicRecommendation[];
+  model_information: Record<string, string>;
+}
+
+// One logged learner interaction, matching the Python service schema.
+export interface AiInteractionLog {
+  user_id: string;
+  timestamp: string;
+  topic: string;
+  exercise_id: string;
+  exercise_type: string;
+  difficulty: string;
+  user_answer: string;
+  correct_answer: string;
+  is_correct: number;
+  time_spent_ms?: number | null;
+  hearts_before?: number;
+  session_index?: number;
+}

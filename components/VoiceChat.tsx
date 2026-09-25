@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Mic, MicOff, Volume2 } from 'lucide-react';
-import { LiveClient } from '../services/geminiService';
+import { LiveClient, clearVoiceMemory } from '../services/gemmaService';
 import { Mascot } from './Mascot';
 import { MascotMood } from '../types';
 
@@ -14,6 +14,7 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({ isOpen, onClose }) => {
   const [isListening, setIsListening] = useState(false);
   const [isEcoSpeaking, setIsEcoSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [memoryReset, setMemoryReset] = useState(false);
   const clientRef = useRef<LiveClient | null>(null);
 
   useEffect(() => {
@@ -108,6 +109,21 @@ export const VoiceChat: React.FC<VoiceChatProps> = ({ isOpen, onClose }) => {
               </div>
             )}
           </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              clearVoiceMemory();
+              setMemoryReset(true);
+              setTimeout(() => setMemoryReset(false), 2000);
+            }}
+            className="text-xs text-slate-400 hover:text-red-500 dark:text-slate-500 dark:hover:text-red-400 underline transition-colors"
+          >
+            Reset Eco's memory
+          </button>
+          {memoryReset && (
+            <p className="text-xs text-green-500 mt-1">Memory cleared ✓</p>
+          )}
         </div>
       </div>
     </div>

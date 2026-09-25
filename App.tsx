@@ -6,9 +6,13 @@ import {
   Leaf, ExternalLink, Lock, Home, RefreshCw, ShoppingBag, Shield, Gift, SkipForward, Turtle, User as UserIcon, Skull, Swords, AlertTriangle, ChevronLeft, Sun, Moon, Loader
 } from 'lucide-react';
 import { 
-  User, UserProgress, Lesson, Exercise, ExerciseType, MascotMood, ChatMessage, PlantedTree
+  User, UserProgress, Lesson, Exercise, ExerciseType, MascotMood, ChatMessage, PlantedTree, LessonStatus
 } from './types';
-import { generateProceduralLesson, askEcoAssistant, generateTopicBatch } from './services/geminiService';
+import { generateProceduralLesson, askEcoAssistant, generateTopicBatch } from './services/gemmaService';
+import {
+  checkAiEngineAvailability, isAiEngineAvailable, predictDifficultyForUser,
+  gradeAnswer, recommendTopics, logInteraction, validateLesson, getSessionHistory
+} from './services/aiEngineService';
 import { authService } from './services/authService';
 import { Mascot } from './components/Mascot';
 import { VoiceChat } from './components/VoiceChat';
@@ -87,7 +91,7 @@ function App() {
   const [mascotMood, setMascotMood] = useState<MascotMood>(MascotMood.IDLE);
   const [isVoiceChatOpen, setIsVoiceChatOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [isGeneratingMap, setIsGeneratingMap] = useState(false); // New loading state for infinite map
+  const [isGeneratingMap, setIsGeneratingMap] = useState(false);
   const [loadingTip, setLoadingTip] = useState("");
   const [shakeHeart, setShakeHeart] = useState(false);
   const [showQuitModal, setShowQuitModal] = useState(false);
@@ -99,7 +103,9 @@ function App() {
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [sortingState, setSortingState] = useState<{ [key: string]: string }>({}); 
   const [activeSortingItem, setActiveSortingItem] = useState<string | null>(null);
-  const [lessonStatus, setLessonStatus] = useState<'IDLE' | 'CORRECT' | 'WRONG'>('IDLE');
+  const [lessonStatus, setLessonStatus] = useState<LessonStatus>('IDLE');
+  const [aiDifficultyUsed, setAiDifficultyUsed] = useState(false);
+  const [aiHint, setAiHint] = useState('');
   const [correctAnswersCount, setCorrectAnswersCount] = useState(0);
   const [reactionText, setReactionText] = useState("");
   const [chatInput, setChatInput] = useState("");
@@ -118,6 +124,11 @@ function App() {
     const user = authService.getCurrentUser();
     if (user) setCurrentUser(user);
     setAuthChecked(true);
+  }, []);
+
+  // Check once whether the Python AI engine is reachable.
+  useEffect(() => {
+    checkAiEngineAvailability();
   }, []);
 
   useEffect(() => {
@@ -199,8 +210,27 @@ function App() {
     setIsBossIntro(false);
     try {
       const isBoss = (index + 1) % 5 === 0;
-      const difficulty = currentUser.progress.level > 5 ? 'Intermediate' : 'Beginner';
-      const lesson = await generateProceduralLesson(topic, difficulty, currentUser.language, isBoss);
+      // Default heuristic: keep the original rule as an offline fallback.
+      let difficulty = currentUser.progress.level > 5 ? 'Intermediate' : 'Beginner';
+      setAiDifficultyUsed(false);
+
+      // Integration 1: let the Python model pick the difficulty when available.
+      if (isAiEngineAvailable()) {
+        const prediction = await predictDifficultyForUser(
+          getSessionHistory(), topic, difficulty
+        );
+        if (prediction && prediction.model_used.includes('ML') && prediction.recommended_difficulty) {
+          difficulty = prediction.recommended_difficulty;
+          setAiDifficultyUsed(true);
+        }
+      }
+
+      let lesson = await generateProceduralLesson(topic, difficulty, currentUser.language, isBoss);
+      // Integration 2: validate the generated lesson; retry once, then proceed.
+      const problems = validateLesson(lesson);
+      if (problems.length > 0) {
+        lesson = await generateProceduralLesson(topic, difficulty, currentUser.language, isBoss);
+      }
       lesson.isBoss = isBoss || lesson.topic.toLowerCase().includes('boss');
       setActiveLesson(lesson);
       setCurrentExerciseIndex(0);
@@ -237,23 +267,38 @@ function App() {
     }
   };
 
-  const checkAnswer = () => {
+  const checkAnswer = async () => {
     if (!activeLesson) return;
     const currentEx = activeLesson.exercises[currentExerciseIndex];
-    let isCorrect = false;
-    if (currentEx.type === ExerciseType.SORTING) {
+    const userText = currentEx.type === ExerciseType.SPEAKING ? spokenText : (selectedOption || '');
+    const expectedText = currentEx.type === ExerciseType.SPEAKING ? (currentEx.speakingTarget || '') : currentEx.correctAnswer;
+
+    let verdict: 'CORRECT' | 'ALMOST' | 'WRONG';
+    let gradeHint = '';
+    const needsAi = currentEx.type === ExerciseType.FILL_BLANK || currentEx.type === ExerciseType.SPEAKING;
+
+    if (needsAi && isAiEngineAvailable()) {
+        // Integration 3: use the Python grader for free-text answers.
+        const grade = await gradeAnswer(userText, expectedText);
+        if (grade && grade.verdict) {
+            verdict = grade.verdict;
+            gradeHint = grade.hint || '';
+        } else {
+            verdict = userText.toLowerCase().trim() === expectedText.toLowerCase().trim() ? 'CORRECT' : 'WRONG';
+        }
+    } else if (currentEx.type === ExerciseType.SORTING) {
         const correctPairs = currentEx.correctAnswer.split('|').map(p => p.trim().toLowerCase());
         const userPairs = Object.entries(sortingState).map(([item, cat]) => `${item}:${cat}`.toLowerCase());
         const allUserCorrect = userPairs.every(pair => correctPairs.includes(pair));
-        isCorrect = allUserCorrect && currentEx.options && Object.keys(sortingState).length === currentEx.options.length || false;
+        verdict = (allUserCorrect && currentEx.options && Object.keys(sortingState).length === currentEx.options.length) ? 'CORRECT' : 'WRONG';
     } else if (currentEx.type === ExerciseType.SPEAKING) {
-        const matchPerc = calculateMatchPercentage(currentEx.speakingTarget || "", spokenText);
-        isCorrect = matchPerc >= 0.7;
+        const matchPerc = calculateMatchPercentage(expectedText, userText);
+        verdict = matchPerc >= 0.7 ? 'CORRECT' : 'WRONG';
     } else {
-        isCorrect = selectedOption?.toLowerCase().trim() === currentEx.correctAnswer.toLowerCase().trim();
+        verdict = userText.toLowerCase().trim() === expectedText.toLowerCase().trim() ? 'CORRECT' : 'WRONG';
     }
 
-    if (isCorrect) {
+    if (verdict === 'CORRECT') {
       setLessonStatus('CORRECT');
       setReactionText(POSITIVE_REACTIONS[Math.floor(Math.random() * POSITIVE_REACTIONS.length)]);
       setCorrectAnswersCount(prev => prev + 1);
@@ -264,9 +309,17 @@ function App() {
           setBossHealth(prev => Math.max(0, prev - (100 / activeLesson.exercises.length)));
           setTimeout(() => setBossState('IDLE'), 1000);
       }
+    } else if (verdict === 'ALMOST') {
+      // Partial credit: no heart lost, encouraging hint, some XP at reward time.
+      setLessonStatus('ALMOST');
+      setReactionText('So close - keep going!');
+      setAiHint(gradeHint || 'Almost there. Review the key idea and try again.');
+      setMascotMood(MascotMood.THINKING);
+      playSound('wrong');
     } else {
       setLessonStatus('WRONG');
       setReactionText(NEGATIVE_REACTIONS[Math.floor(Math.random() * NEGATIVE_REACTIONS.length)]);
+      setAiHint(gradeHint);
       setMascotMood(MascotMood.SAD);
       playSound('wrong');
       if (activeLesson.isBoss) {
@@ -279,6 +332,23 @@ function App() {
         updateUserProgress({ hearts: currentUser.progress.hearts - 1 });
       }
     }
+
+    // Integration 5: fire-and-forget interaction logging for future retraining.
+    logInteraction({
+      user_id: currentUser.id,
+      timestamp: new Date().toISOString(),
+      topic: activeLesson.topic,
+      exercise_id: currentEx.id,
+      exercise_type: currentEx.type,
+      difficulty: activeLesson.difficulty,
+      user_answer: userText,
+      correct_answer: expectedText,
+      is_correct: verdict === 'WRONG' ? 0 : 1,
+      time_spent_ms: null,
+      hearts_before: currentUser.progress.hearts,
+      session_index: 0,
+    });
+
     if (isRecording) {
         setIsRecording(false);
         if (audioContextRef.current) audioContextRef.current.suspend();
@@ -324,7 +394,6 @@ function App() {
 
       // Check if we need to generate more topics (Infinite Path)
       let currentTopics = [...currentUser.progress.generatedTopics];
-      // Find index of current topic
       const currentTopicIndex = currentTopics.indexOf(topic);
       
       // If we are within 2 lessons of the end, generate more!
@@ -332,7 +401,20 @@ function App() {
           setIsGeneratingMap(true);
           try {
               const newTopics = await generateTopicBatch(topic, currentUser.language, currentTopics.length);
-              currentTopics = [...currentTopics, ...newTopics];
+              // Integration 6: let Python reorder the new topics when available.
+              let orderedNew = newTopics;
+              if (isAiEngineAvailable() && newTopics.length > 0) {
+                  const profile = Object.fromEntries(
+                      currentUser.progress.completedLessons.map((t) => [t, 1])
+                  );
+                  const rec = await recommendTopics(profile, newTopics, newTopics.length);
+                  if (rec && rec.recommendations.length > 0) {
+                      const recOrder = rec.recommendations.map((r) => r.topic);
+                      const tail = newTopics.filter((t) => !recOrder.includes(t));
+                      orderedNew = [...recOrder, ...tail];
+                  }
+              }
+              currentTopics = [...currentTopics, ...orderedNew];
           } catch (e) {
               console.error("Failed to extend map", e);
           } finally {
@@ -544,6 +626,9 @@ function App() {
         <div className="flex items-center gap-4 md:gap-6 p-4 md:p-6 max-w-3xl mx-auto w-full z-10">
             <button onClick={() => setShowQuitModal(true)} className="text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-red-500 p-2 rounded-xl transition-colors"><XIcon size={24} md:size={28} strokeWidth={2.5}/></button>
             <div className="flex-1 h-3 md:h-4 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden"><div className={`${activeLesson.isBoss ? 'bg-purple-500' : 'bg-green-500'} h-full transition-all duration-500 ease-out rounded-full`} style={{ width: `${progressPerc}%` }}></div></div>
+            {aiDifficultyUsed && (
+                <span className="px-2 py-0.5 text-[10px] md:text-xs font-black uppercase rounded-lg bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-700">AI-adapted</span>
+            )}
             <div className="flex items-center text-red-500 font-bold"><Heart className={`fill-red-500 mr-2 ${shakeHeart ? 'animate-shake' : ''}`} size={24} md:size={28} strokeWidth={2.5}/> <span className="text-lg md:text-xl">{currentUser.progress.hearts}</span></div>
         </div>
 
@@ -637,9 +722,9 @@ function App() {
             ) : null}
         </div>
 
-        <div className={`fixed bottom-0 left-0 w-full z-50 border-t-2 transition-all duration-300 transform ${lessonStatus === 'IDLE' ? (activeLesson.isBoss ? 'bg-purple-950 border-purple-900' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800') : ''} ${lessonStatus === 'CORRECT' ? 'bg-green-100 dark:bg-green-900 border-green-200 dark:border-green-800' : ''} ${lessonStatus === 'WRONG' ? 'bg-red-100 dark:bg-red-900 border-red-200 dark:border-red-800' : ''}`}>
+        <div className={`fixed bottom-0 left-0 w-full z-50 border-t-2 transition-all duration-300 transform ${lessonStatus === 'IDLE' ? (activeLesson.isBoss ? 'bg-purple-950 border-purple-900' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800') : ''} ${lessonStatus === 'CORRECT' ? 'bg-green-100 dark:bg-green-900 border-green-200 dark:border-green-800' : ''} ${lessonStatus === 'ALMOST' ? 'bg-amber-100 dark:bg-amber-900 border-amber-200 dark:border-amber-800' : ''} ${lessonStatus === 'WRONG' ? 'bg-red-100 dark:bg-red-900 border-red-200 dark:border-red-800' : ''}`}>
             <div className="max-w-3xl mx-auto p-4 md:p-8 flex items-center justify-between gap-4 md:gap-6">
-                {lessonStatus !== 'IDLE' && ( <div className="hidden md:block -mt-20"><Mascot mood={lessonStatus === 'CORRECT' ? (activeLesson.isBoss ? MascotMood.BATTLE : MascotMood.HAPPY) : MascotMood.SAD} className="w-24 h-24 md:w-32 md:h-32" /></div>)}
+                {lessonStatus !== 'IDLE' && ( <div className="hidden md:block -mt-20"><Mascot mood={lessonStatus === 'CORRECT' ? (activeLesson.isBoss ? MascotMood.BATTLE : MascotMood.HAPPY) : lessonStatus === 'ALMOST' ? MascotMood.THINKING : MascotMood.SAD} className="w-24 h-24 md:w-32 md:h-32" /></div>)}
                 {lessonStatus === 'IDLE' ? (
                      <div className="w-full flex flex-col gap-3 safe-area-bottom">
                          <button onClick={checkAnswer} disabled={!selectedOption && Object.keys(sortingState).length === 0 && !spokenText} className="w-full bg-green-500 text-white font-extrabold text-lg py-3 md:py-4 rounded-2xl border-b-[6px] border-green-600 active:border-b-0 active:translate-y-[6px] disabled:opacity-50 disabled:active:translate-y-0 disabled:border-b-[6px] transition-all hover:bg-green-400">CHECK</button>
@@ -649,14 +734,15 @@ function App() {
                     <div className="w-full flex flex-col md:flex-row items-center gap-4 safe-area-bottom">
                         <div className="flex flex-col flex-1 w-full">
                              <div className="flex items-center gap-3 mb-1 md:mb-2">
-                                <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center border-2 ${lessonStatus === 'CORRECT' ? 'bg-green-500 border-green-600' : 'bg-red-500 border-red-600'}`}>{lessonStatus === 'CORRECT' ? <Check className="text-white w-5 h-5 md:w-6 md:h-6" strokeWidth={4}/> : <XIcon className="text-white w-5 h-5 md:w-6 md:h-6" strokeWidth={4}/>}</div>
-                                <span className={`font-black text-xl md:text-2xl ${lessonStatus === 'CORRECT' ? 'text-green-700 dark:text-green-300' : 'text-red-700 dark:text-red-300'}`}>
-                                    {lessonStatus === 'CORRECT' ? reactionText : 'Incorrect'}
+                                <div className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center border-2 ${lessonStatus === 'CORRECT' ? 'bg-green-500 border-green-600' : lessonStatus === 'ALMOST' ? 'bg-amber-500 border-amber-600' : 'bg-red-500 border-red-600'}`}>{lessonStatus === 'CORRECT' ? <Check className="text-white w-5 h-5 md:w-6 md:h-6" strokeWidth={4}/> : lessonStatus === 'ALMOST' ? <Star className="text-white w-5 h-5 md:w-6 md:h-6" strokeWidth={4}/> : <XIcon className="text-white w-5 h-5 md:w-6 md:h-6" strokeWidth={4}/>}</div>
+                                <span className={`font-black text-xl md:text-2xl ${lessonStatus === 'CORRECT' ? 'text-green-700 dark:text-green-300' : lessonStatus === 'ALMOST' ? 'text-amber-700 dark:text-amber-300' : 'text-red-700 dark:text-red-300'}`}>
+                                    {lessonStatus === 'CORRECT' ? reactionText : lessonStatus === 'ALMOST' ? (aiHint || 'Almost there!') : 'Incorrect'}
                                 </span>
                              </div>
                              {lessonStatus === 'WRONG' && (<p className="text-red-800 dark:text-red-300 text-base md:text-lg font-medium pl-11 md:pl-14 leading-tight">{exercise.explanation}</p>)}
+                             {lessonStatus === 'WRONG' && aiHint && (<p className="text-slate-600 dark:text-slate-400 text-xs md:text-sm font-medium pl-11 md:pl-14 mt-1">AI hint: {aiHint}</p>)}
                         </div>
-                        <button onClick={handleNext} className={`w-full md:w-auto px-8 md:px-10 py-3 md:py-4 rounded-2xl font-extrabold text-white border-b-[6px] active:border-b-0 active:translate-y-[6px] min-w-[140px] text-lg transition-all ${lessonStatus === 'CORRECT' ? 'bg-green-500 border-green-700 hover:bg-green-400' : 'bg-red-500 border-red-700 hover:bg-red-400'}`}>CONTINUE</button>
+                        <button onClick={handleNext} className={`w-full md:w-auto px-8 md:px-10 py-3 md:py-4 rounded-2xl font-extrabold text-white border-b-[6px] active:border-b-0 active:translate-y-[6px] min-w-[140px] text-lg transition-all ${lessonStatus === 'CORRECT' ? 'bg-green-500 border-green-700 hover:bg-green-400' : lessonStatus === 'ALMOST' ? 'bg-amber-500 border-amber-700 hover:bg-amber-400' : 'bg-red-500 border-red-700 hover:bg-red-400'}`}>CONTINUE</button>
                     </div>
                 )}
             </div>

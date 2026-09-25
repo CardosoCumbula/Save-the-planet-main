@@ -1,6 +1,6 @@
 {
   "name": "Copy of EcoQuest: Learn & Save the Planet",
-  "description": "A gamified, procedural environmental education app powered by Gemini AI. Learn about sustainability with Eco the dog.",
+  "description": "A gamified, procedural environmental education app powered by Google Gemma 4. Learn about sustainability with Eco the dog.",
   "requestFramePermissions": [
     "microphone"
   ]
