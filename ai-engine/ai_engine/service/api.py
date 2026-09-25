@@ -39,12 +39,13 @@ app.add_middleware(
         "http://localhost:3001",
         "http://127.0.0.1:3001",
         "http://192.168.56.1:3001",
+        "https://save-the-planet-main.vercel.app",
     ],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 _live_lock = threading.Lock()
 
 def _load_models():
