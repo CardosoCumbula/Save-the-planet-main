@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.idea/
+
+# Generated data, artifacts and reports (recreated by the pipeline)
+data/raw/
+data/processed/
+artifacts/
+reports/
+coverage.xml
+htmlcov/
+
+# Submission export
+submission/*.docx

@@ -31,3 +31,9 @@ dist-ssr
 # Local backups — never commit
 *.backup
 *.before-*
+
+# Python backend
+ai-engine/.venv/
+ai-engine/**/__pycache__/
+ai-engine/**/*.pyc
+ai-engine/.pytest_cache/
