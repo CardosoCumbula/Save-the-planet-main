@@ -1,8 +1,19 @@
 import logging
+import os
 from pathlib import Path
 
-# Base directory of the repo (ai-engine folder)
-BASE_DIR = Path(__file__).resolve().parent.parent
+# ---------------------------------------------------------------------------
+# Environment detection
+# ---------------------------------------------------------------------------
+# Vercel's filesystem is read-only except for /tmp. Use a writable base
+# directory there so the app can create its data folders at runtime.
+IS_VERCEL = os.environ.get("VERCEL") == "1"
+
+if IS_VERCEL:
+    BASE_DIR = Path("/tmp/ecoquest")
+else:
+    # Base directory of the repo (ai-engine folder)
+    BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Data directories
 DATA_RAW_DIR = BASE_DIR / 'data' / 'raw'
@@ -15,13 +26,17 @@ FIGURES_DIR = REPORTS_DIR / 'figures'
 MODEL_CARDS_DIR = REPORTS_DIR / 'model_cards'
 ARTIFACTS_DIR = BASE_DIR / 'artifacts'
 
-# Ensure directories exist
+# Ensure directories exist (safe on read-only filesystems)
 for _dir in [
     DATA_RAW_DIR, DATA_PROCESSED_DIR,
     METRICS_DIR, FIGURES_DIR, MODEL_CARDS_DIR,
     ARTIFACTS_DIR,
 ]:
-    _dir.mkdir(parents=True, exist_ok=True)
+    try:
+        _dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Read-only filesystem (e.g. Vercel serverless): skip silently.
+        pass
 
 # Random seed for reproducible results
 RANDOM_SEED = 42
@@ -47,13 +62,11 @@ MASTERY_MODEL_CARD = MODEL_CARDS_DIR / 'mastery.md'
 # ---------------------------------------------------------------------------
 # Domain vocabulary (kept in sync with the React application)
 # ---------------------------------------------------------------------------
-# Exercise types used by the app, see src/types.ts
 EXERCISE_TYPES = [
     'MULTIPLE_CHOICE', 'TRUE_FALSE', 'FILL_BLANK',
     'SPEAKING', 'SCENARIO', 'SORTING',
 ]
 
-# Ecology topics used by the simulation and the recommender
 TOPICS = [
     'Recycling', 'Composting', 'Water Conservation', 'Renewable Energy',
     'Biodiversity', 'Climate Change', 'Waste Management',
@@ -72,7 +85,6 @@ TEST_RATIO = 0.15
 # ---------------------------------------------------------------------------
 # Mastery model configuration
 # ---------------------------------------------------------------------------
-# Difficulty thresholds for the adaptive logic (probability of a correct answer)
 THRESHOLD_ADVANCED = 0.80
 THRESHOLD_INTERMEDIATE = 0.45
 # TODO: revisit this threshold once we have real user data.
@@ -111,7 +123,6 @@ GRADER_MODEL_PARAMS = {
     'random_state': RANDOM_SEED,
 }
 
-# Partial credit for ALMOST verdicts (a fraction of a full lesson's XP).
 POSITIVE_XP = 20
 ALMOST_XP = 5
 # TODO: revisit this threshold once we have real user data.
@@ -125,9 +136,6 @@ RECOMMENDER_ARTIFACT = ARTIFACTS_DIR / 'recommender.joblib'
 RECOMMENDER_METRICS_JSON = METRICS_DIR / 'recommender_metrics.json'
 RECOMMENDER_MODEL_CARD = MODEL_CARDS_DIR / 'recommender.md'
 
-# Weights for the candidate score: topic similarity + weakness + difficulty fit.
-# These are initial values, not scientific truths; they should be tuned using
-# real learner data later.
 SIMILARITY_WEIGHT = 0.5
 MASTERY_WEIGHT = 0.3
 WEAKNESS_WEIGHT = 0.2
